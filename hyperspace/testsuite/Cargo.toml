@@ -20,6 +20,7 @@ tonic = { version = "0.7.2", features = ["tls", "tls-roots"] }
 ibc = { path = "../../ibc/modules" }
 ibc-proto = { path = "../../ibc/proto" }
 tendermint-proto = { workspace = true }
+tendermint-rpc = { workspace = true }
 
 hyperspace-core = { path = "../core", features = ["testing"] }
 hyperspace-primitives = { path = "../primitives", features = ["testing"] }

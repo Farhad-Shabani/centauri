@@ -30,7 +30,7 @@ sp-trie = { git = "https://github.com/paritytech/substrate", branch = "polkadot-
 cumulus-primitives-core  = { default-features = false, git = "https://github.com/paritytech/cumulus", branch = "polkadot-v0.9.27" }
 # ibc
 ibc-proto = { path = "../../ibc/proto", default-features = false }
-tendermint = { git = "https://github.com/composableFi/tendermint-rs", rev = "5a74e0f8da4d3dab83cc04b5f1363b018cf3d9e8", optional = true, default-features = false } # cannot be defined as optional in workspace
+tendermint = { workspace = true, optional = true } # cannot be defined as optional in workspace
 tendermint-proto = { workspace = true }
 ics23 = { git = "https://github.com/composablefi/ics23", rev = "b500a5c6068eb53c83c4c6c13bd9d8c25e0bf927", default-features = false }
 grandpa-client-primitives = { package = "grandpa-light-client-primitives", path = "../../algorithms/grandpa/primitives", default-features = false }
@@ -67,9 +67,7 @@ features = ["derive"]
 default-features = false
 
 [dependencies.tendermint-light-client-verifier]
-git = "https://github.com/farhad-shabani/tendermint-rs"
-rev= "ab7db0fa89e1634ad9855bc567ba02d9e8916426"
-default-features = false
+workspace = true
 
 [dev-dependencies]
 chrono = "0.4.19"

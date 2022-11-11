@@ -3845,7 +3845,7 @@ dependencies = [
  "ibc-proto",
  "log",
  "prometheus",
- "tendermint-proto 0.24.0-pre.2 (git+https://github.com/composableFi/tendermint-rs?rev=5a74e0f8da4d3dab83cc04b5f1363b018cf3d9e8)",
+ "tendermint-proto 0.24.0-pre.2 (git+https://github.com/farhad-shabani/tendermint-rs?rev=ab7db0fa89e1634ad9855bc567ba02d9e8916426)",
  "thiserror",
  "tokio",
 ]
