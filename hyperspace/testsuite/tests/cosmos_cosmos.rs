@@ -26,9 +26,9 @@ async fn setup_clients<H: Clone + Send + Sync + 'static>() -> (CosmosClient<H>, 
 	let config_a = CosmosClientConfig {
 		name: "chain_a".to_string(),
 		chain_id: "ibc-0".to_string(),
-		rpc_url: Url::from_str("http://127.0.0.1:27010").unwrap(),
-		grpc_url: Url::from_str("http://127.0.0.1:27012").unwrap(),
-		websocket_url: Url::from_str("ws://127.0.0.1:27010/websocket").unwrap(),
+		rpc_url: Url::from_str("http://127.0.0.1:27030").unwrap(),
+		grpc_url: Url::from_str("http://127.0.0.1:27032").unwrap(),
+		websocket_url: Url::from_str("ws://127.0.0.1:27030/websocket").unwrap(),
 		client_id: Some("7-tendermint".to_string()),
 		connection_id: None,
 		account_prefix: "cosmos".to_string(),
@@ -39,9 +39,9 @@ async fn setup_clients<H: Clone + Send + Sync + 'static>() -> (CosmosClient<H>, 
 	let config_b = CosmosClientConfig {
 		name: "chain_b".to_string(),
 		chain_id: "ibc-1".to_string(),
-		rpc_url: Url::from_str("http://127.0.0.1:27020").unwrap(),
-		grpc_url: Url::from_str("http://127.0.0.1:27022").unwrap(),
-		websocket_url: Url::from_str("ws://127.0.0.1:27020/websocket").unwrap(),
+		rpc_url: Url::from_str("http://127.0.0.1:27040").unwrap(),
+		grpc_url: Url::from_str("http://127.0.0.1:27042").unwrap(),
+		websocket_url: Url::from_str("ws://127.0.0.1:27040/websocket").unwrap(),
 		client_id: Some("7-tendermint".to_string()),
 		connection_id: None,
 		account_prefix: "cosmos".to_string(),
@@ -66,18 +66,26 @@ async fn setup_clients<H: Clone + Send + Sync + 'static>() -> (CosmosClient<H>, 
 	let clients_on_b = chain_b.query_clients().await.unwrap();
 	log::info!(target: "hyperspace", "Clients on chain_b: {:?}", clients_on_b);
 
-	// if !clients_on_a.is_empty() && !clients_on_b.is_empty() {
-	// 	chain_a.set_client_id(clients_on_b[0].clone());
-	// 	chain_b.set_client_id(clients_on_b[0].clone());
-	// 	return (chain_a, chain_b);
-	// }
+	if !clients_on_a.is_empty() && !clients_on_b.is_empty() {
+		chain_a.set_client_id(clients_on_b[0].clone());
+		chain_b.set_client_id(clients_on_b[0].clone());
+		return (chain_a, chain_b);
+	}
 
 	let height = chain_a.latest_height_and_timestamp().await.unwrap();
 	log::info!(target: "hyperspace", "Latest height on chain_a: {:?}", height);
-	let time = chain_a.query_timestamp_at(2000).await.unwrap();
-	log::info!(target: "hyperspace", "Timestamp at height 2000 on chain_a: {:?}", time);
+	let time = chain_a.query_timestamp_at(10).await.unwrap();
+	log::info!(target: "hyperspace", "Timestamp at height 10 on chain_a: {:?}", time);
 	let channels = chain_a.query_channels().await.unwrap();
 	log::info!(target: "hyperspace", "Channels on chain_a: {:?}", channels);
+
+	
+	let height = chain_b.latest_height_and_timestamp().await.unwrap();
+	log::info!(target: "hyperspace", "Latest height on chain_b: {:?}", height);
+	let time = chain_b.query_timestamp_at(10).await.unwrap();
+	log::info!(target: "hyperspace", "Timestamp at height 10 on chain_b: {:?}", time);
+	let channels = chain_b.query_channels().await.unwrap();
+	log::info!(target: "hyperspace", "Channels on chain_b: {:?}", channels);
 
 	let (client_a, client_b) = create_clients(&chain_a, &chain_b).await.unwrap();
 	chain_a.set_client_id(client_a);
@@ -89,11 +97,11 @@ async fn setup_clients<H: Clone + Send + Sync + 'static>() -> (CosmosClient<H>, 
 #[tokio::test]
 async fn cosmos_to_cosmos_ibc_messaging_full_integration_test() {
 	logging::setup_logging();
-	let (mut chain_a, mut chain_b) = setup_clients::<u32>().await;
+	let (mut chain_a, mut chain_b) = setup_clients::<()>().await;
 	// Run tests sequentially
 
 	// no timeouts + connection delay
-	// ibc_messaging_with_connection_delay(&mut chain_a, &mut chain_b).await;
+	ibc_messaging_with_connection_delay(&mut chain_a, &mut chain_b).await;
 
 	// // timeouts + connection delay
 	// ibc_messaging_packet_height_timeout_with_connection_delay(&mut chain_a, &mut chain_b).await;

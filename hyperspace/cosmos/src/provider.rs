@@ -1,41 +1,46 @@
 use super::{error::Error, CosmosClient};
 use crate::finality_protocol::{FinalityEvent, FinalityProtocol};
-use core::{
-	convert::{TryFrom, TryInto},
-	future::Future,
-	str::FromStr,
-	time::Duration,
+use crate::utils::{
+	client_extract_attributes_from_tx, event_is_type_channel, event_is_type_client,
+	event_is_type_connection, ibc_event_try_from_abci_event,
 };
-use futures::{Stream, TryFutureExt};
+use core::{convert::TryFrom, str::FromStr, time::Duration};
+use futures::{
+	stream::{self, select_all},
+	Stream,
+};
+use ibc::protobuf::Protobuf;
 use ibc::{
 	applications::transfer::PrefixedCoin,
 	core::{
 		ics02_client::{
-			client_state::ClientType, events as client_events, height::Height as ICSHeight,
-			trust_threshold::TrustThreshold,
+			client_state::ClientType, events as client_events, events as ClientEvents,
+			height::Height, trust_threshold::TrustThreshold,
 		},
+		ics04_channel::channel::ChannelEnd,
 		ics23_commitment::{commitment::CommitmentPrefix, specs::ProofSpecs},
-		ics24_host::identifier::{ChainId, ChannelId, ClientId, ConnectionId, PortId},
+		ics24_host::{
+			identifier::{ChainId, ChannelId, ClientId, ConnectionId, PortId},
+			path::ChannelEndsPath,
+		},
 	},
 	events::IbcEvent,
 	timestamp::Timestamp,
-	Height,
 };
-
-use crate::utils::client_extract_attributes_from_tx;
 use ibc_proto::{
 	google::protobuf::Any,
 	ibc::core::{
 		channel::v1::{
 			QueryChannelResponse, QueryChannelsRequest, QueryChannelsResponse,
-			QueryNextSequenceReceiveResponse, QueryPacketAcknowledgementResponse,
-			QueryPacketCommitmentResponse, QueryPacketReceiptResponse,
+			QueryConnectionChannelsRequest, QueryNextSequenceReceiveResponse,
+			QueryPacketAcknowledgementResponse, QueryPacketCommitmentResponse,
+			QueryPacketReceiptResponse,
 		},
 		client::v1::{
-			IdentifiedClientState, QueryClientStateResponse, QueryClientStatesRequest,
+			QueryClientStateResponse, QueryClientStatesRequest,
 			QueryConsensusStateResponse,
 		},
-		connection::v1::{IdentifiedConnection, QueryConnectionResponse},
+		connection::v1::{IdentifiedConnection, QueryConnectionResponse, QueryConnectionsRequest},
 	},
 };
 use ibc_rpc::PacketInfo;
@@ -44,13 +49,15 @@ use ics07_tendermint::{
 };
 use pallet_ibc::light_clients::{AnyClientState, AnyConsensusState, HostFunctionsManager};
 use primitives::{Chain, IbcProvider, UpdateType};
-use sp_core::H256;
 use std::pin::Pin;
 use tendermint::block::Height as TmHeight;
-use tendermint_rpc::endpoint::tx::Response;
-use tendermint_rpc::query::Query;
-use tendermint_rpc::{Client, Order};
-use tonic::transport::Channel;
+use tendermint_rpc::{
+	endpoint::tx::Response,
+	event::{Event, EventData},
+	query::{EventType, Query},
+	Client, Order, SubscriptionClient, WebSocketClient,
+};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel};
 
 #[async_trait::async_trait]
 impl<H> IbcProvider for CosmosClient<H>
@@ -76,7 +83,71 @@ where
 	}
 
 	async fn ibc_events(&self) -> Pin<Box<dyn Stream<Item = IbcEvent>>> {
-		todo!()
+		let (ws_client, ws_driver) = WebSocketClient::new(self.websocket_url.clone())
+			.await
+			.map_err(|e| Error::from(format!("Web Socket Client Error {:?}", e)))
+			.unwrap();
+		let driver_handle = std::thread::spawn(|| ws_driver.run());
+
+		// ----
+		let query_all = vec![
+			Query::from(EventType::NewBlock),
+			Query::eq("message.module", "ibc_client"),
+			Query::eq("message.module", "ibc_connection"),
+			Query::eq("message.module", "ibc_channel"),
+		];
+
+		let mut subscriptions = vec![];
+		for query in &query_all {
+			let subscription = ws_client
+				.subscribe(query.clone())
+				.await
+				.map_err(|e| Error::from(format!("Web Socket Client Error {:?}", e)));
+			subscriptions.push(subscription);
+		}
+
+		let all_subscribtions = Box::new(select_all(subscriptions));
+		// Collect IBC events from each RPC event
+		let events = all_subscribtions
+			.map_ok(move |event| {
+				let mut events: Vec<IbcEvent> = vec![];
+				let Event { data, events, query } = event;
+				match data {
+					EventData::NewBlock { block, .. }
+						if query == Query::from(EventType::NewBlock).to_string() =>
+					{
+						events.push(ClientEvents::NewBlock::new(height).into());
+						// events_with_height.append(&mut extract_block_events(height, &events));
+					},
+					EventData::Tx { tx_result } => {
+						for abci_event in &tx_result.result.events {
+							if let Ok(ibc_event) = ibc_event_try_from_abci_event(abci_event) {
+								if query == Query::eq("message.module", "ibc_client").to_string()
+									&& event_is_type_client(&ibc_event)
+								{
+									events.push(ibc_event);
+								} else if query
+									== Query::eq("message.module", "ibc_connection").to_string()
+									&& event_is_type_connection(&ibc_event)
+								{
+									events.push(ibc_event);
+								} else if query
+									== Query::eq("message.module", "ibc_channel").to_string()
+									&& event_is_type_channel(&ibc_event)
+								{
+									events.push(ibc_event);
+								}
+							}
+						}
+					},
+					_ => {},
+				}
+				stream::iter(events).map(Ok)
+			})
+			.map_err(|e| Error::from(format!("Web Socket Client Error {:?}", e)))
+			.try_flatten();
+
+		Pin::new(events)
 	}
 
 	async fn query_client_consensus(
@@ -101,7 +172,27 @@ where
 		at: Height,
 		connection_id: ConnectionId,
 	) -> Result<QueryConnectionResponse, Self::Error> {
-		todo!()
+		use ibc_proto::ibc::core::connection::v1 as connection;
+		use tonic::IntoRequest;
+
+		let mut grpc_client =
+			connection::query_client::QueryClient::connect(self.grpc_url.clone().to_string())
+				.await
+				.map_err(|e| Error::from(e.to_string()))?;
+
+		let mut request =
+			connection::QueryConnectionRequest { connection_id: connection_id.to_string() }
+				.into_request();
+
+		let height = at.revision_height.to_string();
+		let height_param = AsciiMetadataValue::try_from(height.as_str()).unwrap();
+
+		request.metadata_mut().insert("x-cosmos-block-height", height_param);
+
+		let response =
+			grpc_client.connection(request).await.map_err(|e| Error::from(e.to_string()))?;
+
+		Ok(response.into_inner())
 	}
 
 	async fn query_channel_end(
@@ -110,7 +201,19 @@ where
 		channel_id: ChannelId,
 		port_id: PortId,
 	) -> Result<QueryChannelResponse, Self::Error> {
-		todo!()
+		let res = self
+			.query(ChannelEndsPath(port_id, channel_id), at, true)
+			.await
+			.map_err(|e| Error::from(e.to_string()))?;
+
+		let channel_end =
+			ChannelEnd::decode_vec(&res.value).map_err(|e| Error::from(e.to_string()))?;
+
+		Ok(QueryChannelResponse {
+			channel: Some(channel_end.into()),
+			proof: vec![],
+			proof_height: Some(at.into()),
+		})
 	}
 
 	async fn query_proof(&self, at: Height, keys: Vec<Vec<u8>>) -> Result<Vec<u8>, Self::Error> {
@@ -223,7 +326,31 @@ where
 		at: Height,
 		connection_id: &ConnectionId,
 	) -> Result<QueryChannelsResponse, Self::Error> {
-		todo!()
+		let mut grpc_client =
+			ibc_proto::ibc::core::channel::v1::query_client::QueryClient::connect(
+				self.grpc_url.clone().to_string(),
+			)
+			.await
+			.map_err(|e| Error::from(format!("{:?}", e)))?;
+
+		let request = tonic::Request::new(QueryConnectionChannelsRequest {
+			connection: connection_id.to_string(),
+			pagination: None,
+		});
+
+		let response = grpc_client
+			.connection_channels(request)
+			.await
+			.map_err(|e| Error::from(format!("{:?}", e)))?
+			.into_inner();
+
+		let channels = QueryChannelsResponse {
+			channels: response.channels,
+			pagination: response.pagination,
+			height: response.height,
+		};
+
+		Ok(channels)
 	}
 
 	async fn query_send_packets(
@@ -356,7 +483,31 @@ where
 		height: u32,
 		client_id: String,
 	) -> Result<Vec<IdentifiedConnection>, Self::Error> {
-		todo!()
+		let mut grpc_client =
+			ibc_proto::ibc::core::connection::v1::query_client::QueryClient::connect(
+				self.grpc_url.clone().to_string(),
+			)
+			.await
+			.map_err(|e| Error::from(format!("{:?}", e)))?;
+
+		let request = tonic::Request::new(QueryConnectionsRequest { pagination: None });
+
+		let response = grpc_client
+			.connections(request)
+			.await
+			.map_err(|e| Error::from(format!("{:?}", e)))?
+			.into_inner();
+
+		let connections = response
+			.connections
+			.into_iter()
+			.filter_map(|co| {
+				IdentifiedConnection::try_from(co.clone())
+					.map_err(|e| Error::from(format!("Failed to convert connection end: {:?}", e)))
+					.ok()
+			})
+			.collect();
+		Ok(connections)
 	}
 
 	fn is_update_required(
@@ -376,10 +527,10 @@ where
 			TrustThreshold::default(),
 			Duration::new(64000, 0),
 			Duration::new(128000, 0),
-			Duration::new(3, 0),
+			Duration::new(15, 0),
 			latest_height_timestamp.0,
 			ProofSpecs::default(),
-			vec!["".to_string()],
+			vec!["upgrade".to_string(), "upgradedIBCState".to_string()],
 		)
 		.map_err(|e| Error::from(format!("Invalid client state {}", e)))?;
 		let light_block = self
@@ -391,7 +542,7 @@ where
 			)
 			.await
 			.map_err(|e| Error::from(format!("Invalid light block {}", e)))?;
-		let consensus_state = TmConsensusState::from(light_block.signed_header.header);
+		let consensus_state = TmConsensusState::from(light_block.clone().signed_header.header);
 		Ok((
 			AnyClientState::Tendermint(client_state),
 			AnyConsensusState::Tendermint(consensus_state),

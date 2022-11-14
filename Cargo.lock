@@ -3805,6 +3805,7 @@ dependencies = [
  "dirs-next",
  "env_logger",
  "futures",
+ "hex",
  "hyperspace-primitives",
  "ibc",
  "ibc-proto",

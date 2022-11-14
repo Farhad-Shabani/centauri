@@ -74,7 +74,7 @@ where
 		)
 		.await
 		.unwrap();
-
+	log::info!("Connections: {:?}", connections);
 	for connection in connections {
 		let connection_id = ConnectionId::from_str(&connection.id).unwrap();
 		let connection_end = chain_a
@@ -85,12 +85,11 @@ where
 			.unwrap();
 
 		let delay_period = Duration::from_nanos(connection_end.delay_period);
-
-		dbg!(&connection_delay);
-		dbg!(&delay_period);
-
+		log::info!("Delay period: {:?}", delay_period);
+		log::info!("Connection delay: {:?}", connection_delay);
+		log::info!("Connection end: {:?}", connection_end);
 		if delay_period != connection_delay {
-			continue
+			continue;
 		}
 
 		let channels = chain_a
@@ -98,7 +97,7 @@ where
 			.await
 			.unwrap()
 			.channels;
-
+		log::info!("Found {} channels for connection {}", channels.len(), connection_id);
 		for channel in channels {
 			let channel_id = ChannelId::from_str(&channel.channel_id).unwrap();
 			let channel_end = chain_a
@@ -108,7 +107,11 @@ where
 				.channel
 				.unwrap();
 			let channel_end = ChannelEnd::try_from(channel_end).unwrap();
-
+			log::info!(
+				"Found existing channel {:?} with delay period {:?}",
+				channel_id,
+				delay_period
+			);
 			if channel_end.state == State::Open && channel.port_id == PortId::transfer().to_string()
 			{
 				return (
@@ -116,11 +119,10 @@ where
 					channel_id,
 					channel_end.counterparty().channel_id.unwrap().clone(),
 					channel_end.connection_hops[0].clone(),
-				)
+				);
 			}
 		}
 	}
-
 	let (connection_id, ..) = create_connection(chain_a, chain_b, connection_delay).await.unwrap();
 
 	log::info!(target: "hyperspace", "============ Connection handshake completed: ConnectionId({connection_id}) ============");
@@ -498,6 +500,7 @@ pub async fn ibc_messaging_packet_timestamp_timeout_with_connection_delay<A, B>(
 	let (handle, channel_id, channel_b, _connection_id) =
 		setup_connection_and_channel(chain_a, chain_b, Duration::from_secs(60 * 2)).await;
 	// Set channel whitelist and restart relayer loop
+	log::info!(target: "hyperspace", "Suspending send packet relay");
 	handle.abort();
 	chain_a.set_channel_whitelist(vec![(channel_id, PortId::transfer())]);
 	chain_b.set_channel_whitelist(vec![(channel_b, PortId::transfer())]);

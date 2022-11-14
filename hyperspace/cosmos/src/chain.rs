@@ -3,14 +3,14 @@ use crate::finality_protocol::FinalityProtocol;
 use futures::Stream;
 use ibc_proto::cosmos::tx::v1beta1::{
 	mode_info::{Single, Sum},
-	AuthInfo, ModeInfo, SignDoc, SignerInfo, TxBody, TxRaw,
+	Fee, AuthInfo, ModeInfo, SignDoc, SignerInfo, TxBody, TxRaw,
 };
 use ibc_proto::google::protobuf::Any;
 use k256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use primitives::{Chain, IbcProvider};
 use prost::Message;
 use std::pin::Pin;
-use tendermint_rpc::Client;
+use tendermint_rpc::{Client, abci::Transaction};
 
 #[async_trait::async_trait]
 impl<H> Chain for CosmosClient<H>
@@ -95,7 +95,7 @@ where
 		// Submit transaction
 		let response = self
 			.rpc_client
-			.broadcast_tx_sync(tx_bytes.into())
+			.broadcast_tx_async(tx_bytes.into())
 			.await
 			.map_err(|e| Error::from(format!("failed to broadcast transaction {:?}", e)))?;
 

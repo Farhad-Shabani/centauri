@@ -31,7 +31,7 @@ pub struct Verified<H> {
 #[derive(Clone, Debug)]
 pub struct LightClient {
 	peer_id: PeerId,
-	io: RpcIo,
+	rpc_handler: RpcIo,
 }
 
 impl LightClient {
@@ -42,8 +42,8 @@ impl LightClient {
 			.await
 			.map(|s| s.node_info.id)
 			.map_err(|e| Error::from(e.to_string()))?;
-		let io = RpcIo::new(peer_id, rpc_client, None);
-		Ok(Self { peer_id, io })
+		let rpc_handler = RpcIo::new(peer_id, rpc_client, None);
+		Ok(Self { peer_id, rpc_handler })
 	}
 
 	pub async fn prepare_tendermint_light_client<HostFunctions>(
@@ -67,7 +67,7 @@ impl LightClient {
 			clock_drift: client_state.max_clock_drift,
 		};
 
-		Ok(TmLightClient::new(self.peer_id, params, clock, scheduler, verifier, self.io.clone()))
+		Ok(TmLightClient::new(self.peer_id, params, clock, scheduler, verifier, self.rpc_handler.clone()))
 	}
 
 	pub async fn prepare_state(&self, trusted: ICSHeight) -> Result<LightClientState, Error> {
@@ -82,7 +82,7 @@ impl LightClient {
 	}
 
 	async fn fetch_light_block(&self, height: AtHeight) -> Result<LightBlock, Error> {
-		self.io.fetch_light_block(height).map_err(|e| Error::from(e.to_string())).await
+		self.rpc_handler.fetch_light_block(height).map_err(|e| Error::from(e.to_string())).await
 	}
 
 	/// Perform forward verification with bisection.
